@@ -60,6 +60,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--agent",
+        action="store_true",
+        default=None,
+        help="使用 LangChain Agent 模式（三步工具链编排）",
+    )
+
+    parser.add_argument(
+        "--no-agent",
+        action="store_true",
+        default=None,
+        help="使用硬编码模式（直接调用 VLM + 查库 + 语义检索）",
+    )
+
+    parser.add_argument(
         "--max-concurrent",
         type=int,
         default=4,
@@ -151,12 +165,23 @@ def main() -> None:
     config["pipeline"]["device"] = args.device
     config["pipeline"]["conf_threshold"] = args.conf
 
+    # 处理 --agent / --no-agent 开关（命令行优先于 config）
+    if args.agent is not None:
+        config["pipeline"]["use_agent"] = args.agent
+    elif args.no_agent is not None:
+        config["pipeline"]["use_agent"] = not args.no_agent
+
+    # 读取最终 use_agent 配置
+    use_agent = config["pipeline"].get("use_agent", False)
+
     # 显示启动信息
     console.print(Panel(
         f"[bold]🚢 船弦号识别视频流水线[/bold]\n\n"
         f"输入源: [cyan]{args.source}[/cyan]\n"
         f"模式: [{'green' if args.concurrent else 'yellow'}]"
         f"{'并发' if args.concurrent else '级联'}[/]\n"
+        f"推理: [{'magenta' if use_agent else 'blue'}]"
+        f"{'Agent (LangChain)' if use_agent else '硬编码 (直接调用)'}[/]\n"
         f"并发数: {args.max_concurrent}\n"
         f"提示词: {args.prompt_mode}\n"
         f"Demo: {'[green]开启[/green]' if args.demo else '[dim]关闭[/dim]'}\n"

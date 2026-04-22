@@ -53,6 +53,11 @@ pipeline:
   # 提示词模式："detailed"（详细）或 "brief"（简略）
   prompt_mode: "detailed"
 
+  # Agent/硬编码双模式开关
+  # false = 硬编码模式：直接调用 VLM + 查库 + 语义检索，无 LLM Agent 编排
+  # true  = Agent 模式：通过 LangChain ReAct Agent 链路调用 3 个工具（recognize_ship → lookup → retrieve）
+  use_agent: false
+
   # Demo 开关：true 开启视频 demo 可视化，false 关闭
   demo: false
 

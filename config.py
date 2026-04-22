@@ -41,6 +41,7 @@ _DEFAULTS: dict[str, Any] = {
         "process_every_n_frames": 30,
         "output_dir": "./output",
         "prompt_mode": "detailed",
+        "use_agent": False,
         "demo": False,
         "yolo_model": "yolov8n.pt",
         "device": "",

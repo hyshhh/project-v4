@@ -60,10 +60,18 @@ class ShipPipeline:
         self._max_queued_frames: int = pipe_cfg.get("max_queued_frames", 30)
         self._process_every_n: int = max(1, pipe_cfg.get("process_every_n_frames", 1))
         self._demo_enabled: bool = pipe_cfg.get("demo", False)
+        self._use_agent: bool = pipe_cfg.get("use_agent", False)
 
         # 读取 Agent 数据库配置
         from database import ShipDatabase
         self._db = ShipDatabase(config=config)
+
+        # Agent 模式：初始化 LangChain ReAct Agent
+        self._agent = None
+        if self._use_agent:
+            from agent import create_agent
+            self._agent = create_agent(config=config)
+            logger.info("Agent 模式已启用：使用 LangChain ReAct Agent 三步工具链")
 
         # 初始化组件
         self._detector = ShipDetector(
@@ -105,8 +113,9 @@ class ShipPipeline:
         self._max_trace_entries = 500
 
         logger.info(
-            "ShipPipeline 初始化: mode=%s, process_every=%d",
+            "ShipPipeline 初始化: mode=%s, inference=%s, process_every=%d",
             "concurrent" if self._concurrent_mode else "cascade",
+            "agent" if self._use_agent else "hardcoded",
             self._process_every_n,
         )
 
@@ -198,6 +207,51 @@ class ShipPipeline:
             semantic_match_ids=semantic_ids,
         )
 
+    def _run_agent_chain(self, crop: np.ndarray) -> AgentResult:
+        """
+        使用 LangChain ReAct Agent 执行三步链路。
+
+        Agent 内部调用 3 个工具：
+          1. recognize_ship → 识别弦号+描述
+          2. lookup_by_hull_number → 精确查找
+          3. retrieve_by_description → 语义检索
+
+        Agent 自动决定调用顺序和是否跳步，结果通过 _parse_result 结构化解析。
+        """
+        if self._agent is None:
+            raise RuntimeError("Agent 模式未初始化（use_agent=True 但 agent 为 None）")
+
+        # 将 crop 编码为 base64，作为 query 传入 Agent
+        crop_b64 = self._encode_image(crop)
+        query = f"请识别以下船只的弦号，图像 base64 如下：\n{crop_b64}"
+
+        # 使用 run_with_result 获取结构化结果
+        result = self._agent.run_with_result(query)
+
+        self._log_agent_trace(
+            "agent_chain",
+            track_id=0,  # 由调用方填充实际 track_id
+            frame_id=0,  # 由调用方填充实际 frame_id
+            content=(
+                f"弦号={result.hull_number or '(无)'} "
+                f"匹配={result.match_type} "
+                f"语义候选={result.semantic_match_ids}"
+            ),
+        )
+
+        return result
+
+    def _run_recognition(self, crop: np.ndarray) -> AgentResult:
+        """
+        统一识别调度：根据 use_agent 配置选择硬编码链路或 Agent 链路。
+
+        - use_agent=False → _run_three_step_chain（直接调用 VLM + 查库 + 语义检索）
+        - use_agent=True  → _run_agent_chain（LangChain ReAct Agent 编排 3 个工具）
+        """
+        if self._use_agent:
+            return self._run_agent_chain(crop)
+        return self._run_three_step_chain(crop)
+
     # ── 推理结果处理 ────────────────────────────
 
     def _handle_agent_result(
@@ -268,9 +322,9 @@ class ShipPipeline:
             )
 
             try:
-                agent_result = self._run_three_step_chain(det.crop)
+                agent_result = self._run_recognition(det.crop)
                 self._log_agent_trace(
-                    "three_step_chain",
+                    "recognition_result",
                     track_id=det.track_id,
                     frame_id=frame_id,
                     content=(
@@ -344,7 +398,7 @@ class ShipPipeline:
             )
 
             try:
-                agent_result = self._run_three_step_chain(crop)
+                agent_result = self._run_recognition(crop)
             except Exception as e:
                 logger.exception("Agent 推理异常 (track=%d, frame=%d)", track_id, frame_id)
                 agent_result = AgentResult(answer=str(e))
@@ -484,9 +538,10 @@ class ShipPipeline:
             start_time = time.time()
 
             logger.info(
-                "开始处理: source=%s, mode=%s, demo=%s",
+                "开始处理: source=%s, mode=%s, inference=%s, demo=%s",
                 source,
                 "concurrent" if self._concurrent_mode else "cascade",
+                "agent" if self._use_agent else "hardcoded",
                 self._demo_enabled,
             )
 
@@ -598,6 +653,7 @@ class ShipPipeline:
                 "elapsed_seconds": round(elapsed, 1),
                 "avg_fps": round(frame_id / elapsed, 1) if elapsed > 0 else 0,
                 "mode": "concurrent" if self._concurrent_mode else "cascade",
+                "inference": "agent" if self._use_agent else "hardcoded",
                 "screenshots_saved": self._saver.saved_count,
             }
 
@@ -667,6 +723,15 @@ class ShipPipeline:
         """设置 demo 开关。"""
         self._demo_enabled = enabled
         logger.info("Demo 模式: %s", "开启" if enabled else "关闭")
+
+    def set_use_agent(self, enabled: bool) -> None:
+        """设置 Agent 模式开关。"""
+        if enabled and self._agent is None:
+            from agent import create_agent
+            self._agent = create_agent(config=self._config)
+            logger.info("Agent 模式已启用：初始化 LangChain ReAct Agent")
+        self._use_agent = enabled
+        logger.info("推理模式: %s", "Agent (LangChain)" if enabled else "硬编码 (直接调用)")
 
     def switch_to_concurrent(self, enabled: bool) -> None:
         """动态切换级联/并发模式。"""
