@@ -95,6 +95,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--enable-refresh",
+        action="store_true",
+        default=None,
+        help="开启定时刷新（每隔 gap_num 帧重新识别已跟踪的船只）",
+    )
+
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        default=None,
+        help="关闭定时刷新（仅新 track 时识别，保持原有逻辑）",
+    )
+
+    parser.add_argument(
+        "--gap-num",
+        type=int,
+        default=None,
+        help="定时刷新间隔帧数（默认 150，仅 --enable-refresh 时生效）",
+    )
+
+    parser.add_argument(
         "--prompt-mode",
         choices=["detailed", "brief"],
         default="detailed",
@@ -171,8 +192,20 @@ def main() -> None:
     elif args.no_agent is not None:
         config["pipeline"]["use_agent"] = not args.no_agent
 
-    # 读取最终 use_agent 配置
+    # 处理 --enable-refresh / --no-refresh 开关（命令行优先于 config）
+    if args.enable_refresh is not None:
+        config["pipeline"]["enable_refresh"] = args.enable_refresh
+    elif args.no_refresh is not None:
+        config["pipeline"]["enable_refresh"] = not args.no_refresh
+
+    # 处理 --gap-num
+    if args.gap_num is not None:
+        config["pipeline"]["gap_num"] = max(1, args.gap_num)
+
+    # 读取最终配置
     use_agent = config["pipeline"].get("use_agent", False)
+    enable_refresh = config["pipeline"].get("enable_refresh", False)
+    gap_num = config["pipeline"].get("gap_num", 150)
 
     # 显示启动信息
     console.print(Panel(
@@ -183,6 +216,7 @@ def main() -> None:
         f"推理: [{'magenta' if use_agent else 'blue'}]"
         f"{'Agent (LangChain)' if use_agent else '硬编码 (直接调用)'}[/]\n"
         f"并发数: {args.max_concurrent}\n"
+        f"定时刷新: {'[green]开启[/green] (每%d帧)' % gap_num if enable_refresh else '[dim]关闭[/dim]'}\n"
         f"提示词: {args.prompt_mode}\n"
         f"Demo: {'[green]开启[/green]' if args.demo else '[dim]关闭[/dim]'}\n"
         f"YOLO: {args.yolo_model}",

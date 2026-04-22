@@ -42,6 +42,8 @@ _DEFAULTS: dict[str, Any] = {
         "output_dir": "./output",
         "prompt_mode": "detailed",
         "use_agent": False,
+        "enable_refresh": False,
+        "gap_num": 150,
         "demo": False,
         "yolo_model": "yolov8n.pt",
         "device": "",
