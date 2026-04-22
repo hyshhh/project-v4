@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass, field, field
+from dataclasses import dataclass, field
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,7 @@ class TrackInfo:
     pending: bool = False          # 是否正在异步识别中
     first_seen_frame: int = 0      # 首次出现的帧号
     last_seen_frame: int = 0       # 最近一次出现的帧号
+    last_recognized_frame: int = 0 # 上次完成识别的帧号（用于定时刷新判断）
     db_match_id: str = ""          # 数据库匹配到的弦号（确认后）
     db_match_desc: str = ""        # 数据库匹配到的描述
     db_matched: bool = False       # 是否在数据库中精确匹配到
@@ -81,6 +82,34 @@ class TrackManager:
             info = self._tracks[track_id]
             return not info.recognized and not info.pending
 
+    def needs_refresh(self, track_id: int, frame_id: int, gap_num: int) -> bool:
+        """
+        判断该 track 是否需要定时刷新识别。
+
+        条件：
+        - 已识别 (recognized=True)
+        - 非 pending 状态
+        - 距上次识别已超过 gap_num 帧
+
+        Args:
+            track_id: 跟踪 ID。
+            frame_id: 当前帧号。
+            gap_num: 刷新间隔帧数。
+
+        Returns:
+            是否需要刷新。
+        """
+        with self._lock:
+            if track_id not in self._tracks:
+                return False
+            info = self._tracks[track_id]
+            if not info.recognized or info.pending:
+                return False
+            if info.last_recognized_frame == 0:
+                # last_recognized_frame 未设置（兼容旧数据），用 first_seen_frame
+                return frame_id - info.first_seen_frame >= gap_num
+            return frame_id - info.last_recognized_frame >= gap_num
+
     def mark_pending(self, track_id: int) -> None:
         """标记 track 正在异步识别中。"""
         with self._lock:
@@ -98,6 +127,7 @@ class TrackManager:
         track_id: int,
         hull_number: str,
         description: str,
+        frame_id: int = 0,
     ) -> None:
         """将识别结果绑定到 track ID。"""
         with self._lock:
@@ -110,6 +140,7 @@ class TrackManager:
             info.description = description
             info.recognized = True
             info.pending = False
+            info.last_recognized_frame = frame_id
 
         logger.info(
             "Track %d 识别完成: 弦号=%s, 描述=%s",

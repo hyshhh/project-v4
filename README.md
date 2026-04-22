@@ -27,6 +27,7 @@
 |------|------|
 | YOLO 船只检测 | 基于 ultralytics YOLO，支持 ByteTrack / BoTSORT 追踪 |
 | 跟踪 ID 绑定 | track ID 绑定唯一弦号，跟踪持续则沿用，无需重复调用 Agent |
+| **定时刷新** | `enable_refresh` 开启后，每隔 `gap_num` 帧自动重新识别已跟踪船只，防止场景切换导致识别过时 |
 | Qwen3.5 VLM 识别 | 视觉大模型对裁剪图像进行弦号识别与描述生成 |
 | **Agent/硬编码双模式** | `use_agent` 开关：Agent 模式用 LangChain 三步工具链编排；硬编码模式直接调用 VLM+查库+检索 |
 | 级联/并发双模式 | 级联同步等待；并发双层架构（帧级队列 + crop 级并发） |
@@ -378,6 +379,9 @@ python -m pipeline.cli video.mp4 --max-frames 500 --verbose
 | `--concurrent` | `-c` | 并发模式（默认级联模式） | 关闭 |
 | `--agent` | — | 使用 LangChain Agent 模式（三步工具链编排） | 关闭 |
 | `--no-agent` | — | 使用硬编码模式（直接调用 VLM+查库+检索） | — |
+| `--enable-refresh` | — | 开启定时刷新（每隔 gap_num 帧重新识别已跟踪船只） | 关闭 |
+| `--no-refresh` | — | 关闭定时刷新 | — |
+| `--gap-num` | — | 定时刷新间隔帧数 | `150` |
 | `--max-concurrent` | — | 最大并发 Agent 推理数 | `4` |
 | `--max-queued-frames` | — | 并发模式最大队列深度（防 OOM） | `30` |
 | `--process-every` | — | 每 N 帧处理一次 | `1` |
@@ -446,6 +450,8 @@ python -m pipeline.cli video.mp4 --max-frames 500 --verbose
 ```
 
 **后续帧**：track ID 沿用已识别结果，不再调用 Agent，直到 track 消失。
+
+**定时刷新**（`enable_refresh: true`）：已识别的 track 每隔 `gap_num` 帧（默认 150）会被重新送入 Agent 识别流程，以应对船只外观变化或场景切换导致的识别过时。刷新逻辑与新 track 识别互不冲突——新 track 仍然立即识别，已识别 track 额外按间隔刷新。
 
 ### 交互按键（display 模式）
 
@@ -570,6 +576,14 @@ pipeline:
   # false = 硬编码模式：直接调用 VLM + 查库 + 语义检索，无 LLM Agent 编排
   # true  = Agent 模式：通过 LangChain ReAct Agent 链路调用 3 个工具
   use_agent: false
+
+  # 定时刷新开关
+  # true  = 每隔 gap_num 帧对已识别的 track 重新调用 Agent 识别
+  # false = 仅新 track 出现时识别一次（默认，保持原有逻辑）
+  enable_refresh: false
+
+  # 刷新间隔帧数（仅 enable_refresh=true 时生效）
+  gap_num: 150
 
   # 级联/并发模式
   concurrent_mode: false
