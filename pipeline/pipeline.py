@@ -213,109 +213,33 @@ class ShipPipeline:
 
     def _run_agent_chain(self, crop: np.ndarray) -> AgentResult:
         """
-        使用外层 Agent 的三步工具链执行识别。
+        使用外层 Agent 执行三步链路（recognize_ship → lookup → retrieve）。
 
-        直接调用 Agent 的工具函数（recognize_ship → lookup → retrieve），
-        而非走 ReAct 循环（base64 文本化会导致 token 超限）。
-
-        工具函数内部正确地以 image_url 格式发送图片给 VLM API。
+        将 crop 编码为 base64 传入 Agent，由 Agent 自行编排工具调用。
         """
         if self._agent is None:
             raise RuntimeError("Agent 模式未初始化（use_agent=True 但 agent 为 None）")
 
-        from tools import build_tools
-
-        # 获取 Agent 的三个工具函数
-        tools_list = build_tools(self._db)
-        tool_map = {t.name: t for t in tools_list}
-
-        # 第一步：recognize_ship — 调用 VLM 识别弦号+描述
         crop_b64 = self._encode_image(crop)
-        recognize_tool = tool_map["recognize_ship"]
-        recognize_result_str = recognize_tool.invoke({"image_base64": crop_b64})
+        query = (
+            f"请识别以下船只图像中的弦号：\n"
+            f"data:image/jpeg;base64,{crop_b64}"
+        )
 
-        try:
-            import json as _json
-            vlm_data = _json.loads(recognize_result_str)
-        except Exception:
-            vlm_data = {"hull_number": "", "description": ""}
-
-        hull_number = vlm_data.get("hull_number", "")
-        description = vlm_data.get("description", "")
+        result = self._agent.run_with_result(query)
 
         self._log_agent_trace(
-            "agent_tool_recognize",
+            "agent_chain_result",
             track_id=0,
             frame_id=0,
-            content=f"VLM 识别: 弦号={hull_number or '(无)'} 描述={description[:50]}",
+            content=(
+                f"弦号={result.hull_number or '(无)'} "
+                f"匹配={result.match_type} "
+                f"语义候选={result.semantic_match_ids}"
+            ),
         )
 
-        if not hull_number and not description:
-            return AgentResult(answer="VLM 未返回结果")
-
-        # 第二步：lookup_by_hull_number — 有弦号时精确查找
-        exact_matched = False
-        semantic_ids: list[str] = []
-
-        if hull_number:
-            lookup_tool = tool_map["lookup_by_hull_number"]
-            lookup_result_str = lookup_tool.invoke({"hull_number": hull_number})
-            try:
-                lookup_data = _json.loads(lookup_result_str)
-            except Exception:
-                lookup_data = {}
-
-            self._log_agent_trace(
-                "agent_tool_lookup",
-                track_id=0,
-                frame_id=0,
-                content=f"精确查找: found={lookup_data.get('found', False)}",
-            )
-
-            if lookup_data.get("found"):
-                exact_matched = True
-                description = lookup_data.get("description", description)
-            elif description:
-                # 第三步：retrieve_by_description — 弦号未匹配，语义检索
-                retrieve_tool = tool_map["retrieve_by_description"]
-                retrieve_result_str = retrieve_tool.invoke({"target_description": description})
-                try:
-                    retrieve_data = _json.loads(retrieve_result_str)
-                    results = retrieve_data.get("results", [])
-                    semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
-                except Exception:
-                    pass
-
-                self._log_agent_trace(
-                    "agent_tool_retrieve",
-                    track_id=0,
-                    frame_id=0,
-                    content=f"语义检索: 候选={semantic_ids}",
-                )
-        elif description:
-            # 无弦号，直接第三步：语义检索
-            retrieve_tool = tool_map["retrieve_by_description"]
-            retrieve_result_str = retrieve_tool.invoke({"target_description": description})
-            try:
-                retrieve_data = _json.loads(retrieve_result_str)
-                results = retrieve_data.get("results", [])
-                semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
-            except Exception:
-                pass
-
-            self._log_agent_trace(
-                "agent_tool_retrieve",
-                track_id=0,
-                frame_id=0,
-                content=f"语义检索: 候选={semantic_ids}",
-            )
-
-        return AgentResult(
-            hull_number=hull_number,
-            description=description,
-            match_type="exact" if exact_matched else ("semantic" if semantic_ids else "none"),
-            semantic_match_ids=semantic_ids,
-        )
+        return result
 
     def _run_recognition(self, crop: np.ndarray) -> AgentResult:
         """
