@@ -36,10 +36,22 @@ python -m vllm.entrypoints.openai.api_server \
 ### 基本用法
 
 ```bash
-# 处理视频 + 输出结果
+# 处理视频 + 输出结果（默认硬编码模式）
 python -m pipeline.cli /media/ddc/新加卷/hys/hysnew2/学习/1.mp4 \
   --demo \
   --output /media/ddc/新加卷/hys/hysnew2/学习/result.mp4
+```
+
+### Agent 模式（LangChain 三步工具链）
+
+```bash
+# 使用 Agent 模式（recognize_ship → lookup → retrieve）
+python -m pipeline.cli /media/ddc/新加卷/hys/hysnew2/学习/1.mp4 \
+  --agent --demo --output result.mp4
+
+# 强制硬编码模式
+python -m pipeline.cli /media/ddc/新加卷/hys/hysnew2/学习/1.mp4 \
+  --no-agent --demo --output result.mp4
 ```
 
 ### 实时显示
@@ -90,6 +102,8 @@ python -m pipeline.cli rtsp://192.168.1.100/stream --demo --display
 | `--display` | 实时弹窗显示 | 关 |
 | `-o / --output` | 输出视频路径 | 无 |
 | `-c / --concurrent` | 并发模式 | 级联模式 |
+| `--agent` | Agent 模式（LangChain 三步工具链） | 关 |
+| `--no-agent` | 硬编码模式（直接调用 VLM+查库+检索） | — |
 | `--max-concurrent N` | 并发 Agent 数 | 4 |
 | `--max-frames N` | 最大处理帧数（0=不限） | 0 |
 | `--process-every N` | 每N帧处理一次 | 1 |
@@ -102,6 +116,15 @@ python -m pipeline.cli rtsp://192.168.1.100/stream --demo --display
 ---
 
 ## config.yaml 关键配置
+
+### Agent/硬编码模式切换
+
+```yaml
+pipeline:
+  # false = 硬编码模式（直接调用 VLM + 查库 + 语义检索）
+  # true  = Agent 模式（LangChain ReAct Agent 编排 3 个工具）
+  use_agent: false
+```
 
 ### Tracker 调参
 
@@ -148,8 +171,22 @@ cat data/ships.csv
 
 ---
 
+## 推理模式对比
+
+| | 硬编码模式 (默认) | Agent 模式 |
+|---|---|---|
+| 调用方式 | 直接调 VLM → 查库 → 语义检索 | LangChain ReAgent 编排 3 个工具 |
+| 优势 | 快速、可控、无额外 LLM 调用 | 灵活、可扩展、Agent 自动决策跳步 |
+| 适用 | 固定流程、追求速度 | 需要 Agent 灵活编排的场景 |
+| config | `use_agent: false` | `use_agent: true` |
+| CLI | `--no-agent` 或默认 | `--agent` |
+
+---
+
 ## 运行时快捷键
 
 显示窗口下：
 - **`q`** — 退出
 - **`d`** — 切换 detailed / brief 提示词
+- **`p`** — 暂停 / 继续
+- **`s`** — 截图

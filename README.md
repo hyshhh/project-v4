@@ -28,6 +28,7 @@
 | YOLO 船只检测 | 基于 ultralytics YOLO，支持 ByteTrack / BoTSORT 追踪 |
 | 跟踪 ID 绑定 | track ID 绑定唯一弦号，跟踪持续则沿用，无需重复调用 Agent |
 | Qwen3.5 VLM 识别 | 视觉大模型对裁剪图像进行弦号识别与描述生成 |
+| **Agent/硬编码双模式** | `use_agent` 开关：Agent 模式用 LangChain 三步工具链编排；硬编码模式直接调用 VLM+查库+检索 |
 | 级联/并发双模式 | 级联同步等待；并发双层架构（帧级队列 + crop 级并发） |
 | FPS 统计 | 10 秒滑动窗口统计码流和处理帧率 |
 | 提示词切换 | detailed（详细）/ brief（简略）运行时可切换 |
@@ -311,16 +312,28 @@ $ python3 build_db.py ./my_ship_photos
 │ 文件/相机/流  │     │  ByteTrack       │     └────────┬──────────┘
 └─────────────┘     └──────────────────┘              │
                                                          ▼
-┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐
-│  输出视频     │◀────│  渲染检测框+结果   │◀────│  Qwen3.5 VLM 识别  │
-│ + Demo 窗口  │     │  DemoRenderer    │     │  弦号 + 描述       │
-└─────────────┘     └──────────────────┘     └────────┬──────────┘
-                                                         │
-                                                         ▼
                                               ┌───────────────────┐
-                                              │  Agent 数据库匹配   │
-                                              │  精确匹配 / 语义检索 │
-                                              └───────────────────┘
+                                              │  use_agent 开关    │
+                                              └───┬───────────┬───┘
+                                                  │           │
+                                            false ▼     true  ▼
+                                        ┌──────────┐  ┌───────────────────┐
+                                        │ 硬编码链路 │  │ LangChain Agent   │
+                                        │ VLM→查库  │  │ 三步工具链编排     │
+                                        │ →语义检索 │  │ recognize_ship    │
+                                        │          │  │ →lookup→retrieve  │
+                                        └────┬─────┘  └────────┬──────────┘
+                                             │                 │
+                                             └────────┬────────┘
+                                                      ▼
+                                           ┌───────────────────┐
+                                           │  绑定 track 结果    │
+                                           └────────┬──────────┘
+                                                      ▼
+┌─────────────┐     ┌──────────────────┐     ┌───────────────────┐
+│  输出视频     │◀────│  渲染检测框+结果   │◀────│  Agent 数据库匹配   │
+│ + Demo 窗口  │     │  DemoRenderer    │     │  精确匹配 / 语义检索 │
+└─────────────┘     └──────────────────┘     └───────────────────┘
 ```
 
 ### 快速使用
@@ -337,6 +350,12 @@ python -m pipeline.cli rtsp://192.168.1.100/stream
 
 # Demo 可视化 + 输出结果视频
 python -m pipeline.cli video.mp4 --demo --output result.mp4
+
+# Agent 模式（通过 LangChain ReAct Agent 三步工具链编排）
+python -m pipeline.cli video.mp4 --agent --demo --output result.mp4
+
+# 硬编码模式（默认，直接调用 VLM + 查库 + 语义检索）
+python -m pipeline.cli video.mp4 --no-agent --demo --output result.mp4
 
 # 并发模式（高吞吐）
 python -m pipeline.cli video.mp4 --concurrent --max-concurrent 8
@@ -357,6 +376,8 @@ python -m pipeline.cli video.mp4 --max-frames 500 --verbose
 | `--demo` | — | 在输出上叠加检测框和识别结果 | 关闭 |
 | `--display` | — | 实时显示窗口（需有显示器） | 关闭 |
 | `--concurrent` | `-c` | 并发模式（默认级联模式） | 关闭 |
+| `--agent` | — | 使用 LangChain Agent 模式（三步工具链编排） | 关闭 |
+| `--no-agent` | — | 使用硬编码模式（直接调用 VLM+查库+检索） | — |
 | `--max-concurrent` | — | 最大并发 Agent 推理数 | `4` |
 | `--max-queued-frames` | — | 并发模式最大队列深度（防 OOM） | `30` |
 | `--process-every` | — | 每 N 帧处理一次 | `1` |
@@ -497,6 +518,7 @@ stats = pipeline.process(
 
 # 运行时控制
 pipeline.set_demo(True)              # 开启可视化
+pipeline.set_use_agent(True)         # 切换为 Agent 模式（LangChain 三步工具链）
 pipeline.set_prompt_mode("brief")    # 切换简略提示词
 pipeline.switch_to_concurrent(True)  # 切换并发模式
 
@@ -544,6 +566,12 @@ app:
 
 # ── Pipeline ──
 pipeline:
+  # Agent/硬编码双模式
+  # false = 硬编码模式：直接调用 VLM + 查库 + 语义检索，无 LLM Agent 编排
+  # true  = Agent 模式：通过 LangChain ReAct Agent 链路调用 3 个工具
+  use_agent: false
+
+  # 级联/并发模式
   concurrent_mode: false
   max_concurrent: 4
   max_queued_frames: 30
