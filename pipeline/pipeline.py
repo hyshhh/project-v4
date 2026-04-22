@@ -61,6 +61,8 @@ class ShipPipeline:
         self._process_every_n: int = max(1, pipe_cfg.get("process_every_n_frames", 1))
         self._demo_enabled: bool = pipe_cfg.get("demo", False)
         self._use_agent: bool = pipe_cfg.get("use_agent", False)
+        self._enable_refresh: bool = pipe_cfg.get("enable_refresh", False)
+        self._gap_num: int = pipe_cfg.get("gap_num", 150)
 
         # 读取 Agent 数据库配置
         from database import ShipDatabase
@@ -113,10 +115,12 @@ class ShipPipeline:
         self._max_trace_entries = 500
 
         logger.info(
-            "ShipPipeline 初始化: mode=%s, inference=%s, process_every=%d",
+            "ShipPipeline 初始化: mode=%s, inference=%s, process_every=%d, refresh=%s(gap=%d)",
             "concurrent" if self._concurrent_mode else "cascade",
             "agent" if self._use_agent else "hardcoded",
             self._process_every_n,
+            "on" if self._enable_refresh else "off",
+            self._gap_num,
         )
 
     # ── Agent 链路日志 ──────────────────────────
@@ -349,6 +353,7 @@ class ShipPipeline:
             track_id,
             agent_result.hull_number,
             agent_result.description,
+            frame_id=frame_id,
         )
 
         if agent_result.match_type == "exact":
@@ -378,19 +383,27 @@ class ShipPipeline:
     ) -> None:
         """级联模式：同步处理每个需要识别的检测目标。"""
         for det in detections:
-            if not self._tracker.needs_recognition(det.track_id):
+            if det.crop is None or det.crop.size == 0:
                 continue
 
-            if det.crop is None or det.crop.size == 0:
+            # 判断是否需要识别：新 track 或定时刷新
+            need_new = self._tracker.needs_recognition(det.track_id)
+            need_refresh = (
+                self._enable_refresh
+                and self._tracker.needs_refresh(det.track_id, frame_id, self._gap_num)
+            )
+
+            if not need_new and not need_refresh:
                 continue
 
             self._tracker.mark_pending(det.track_id)
 
+            trace_type = "cascade_refresh" if need_refresh else "cascade_infer_start"
             self._log_agent_trace(
-                "cascade_infer_start",
+                trace_type,
                 track_id=det.track_id,
                 frame_id=frame_id,
-                content="同步推理开始",
+                content="定时刷新推理" if need_refresh else "同步推理开始",
             )
 
             try:
@@ -418,10 +431,17 @@ class ShipPipeline:
     ) -> None:
         """并发模式：将 crop 送入队列，Agent 异步推理。"""
         for det in detections:
-            if not self._tracker.needs_recognition(det.track_id):
+            if det.crop is None or det.crop.size == 0:
                 continue
 
-            if det.crop is None or det.crop.size == 0:
+            # 判断是否需要识别：新 track 或定时刷新
+            need_new = self._tracker.needs_recognition(det.track_id)
+            need_refresh = (
+                self._enable_refresh
+                and self._tracker.needs_refresh(det.track_id, frame_id, self._gap_num)
+            )
+
+            if not need_new and not need_refresh:
                 continue
 
             # 标记为 pending
@@ -436,11 +456,12 @@ class ShipPipeline:
 
             try:
                 self._task_queue.put_nowait(task)
+                trace_type = "concurrent_refresh_enqueue" if need_refresh else "concurrent_enqueue"
                 self._log_agent_trace(
-                    "concurrent_enqueue",
+                    trace_type,
                     track_id=det.track_id,
                     frame_id=frame_id,
-                    content=f"送入异步队列 (队列深度: {self._task_queue.qsize()})",
+                    content=f"{'定时刷新' if need_refresh else '新track'}送入异步队列 (队列深度: {self._task_queue.qsize()})",
                 )
             except queue.Full:
                 logger.warning(
@@ -610,11 +631,13 @@ class ShipPipeline:
             start_time = time.time()
 
             logger.info(
-                "开始处理: source=%s, mode=%s, inference=%s, demo=%s",
+                "开始处理: source=%s, mode=%s, inference=%s, demo=%s, refresh=%s(gap=%d)",
                 source,
                 "concurrent" if self._concurrent_mode else "cascade",
                 "agent" if self._use_agent else "hardcoded",
                 self._demo_enabled,
+                "on" if self._enable_refresh else "off",
+                self._gap_num,
             )
 
             while True:

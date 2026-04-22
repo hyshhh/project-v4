@@ -40,6 +40,14 @@ python -m vllm.entrypoints.openai.api_server \
 python -m pipeline.cli /media/ddc/新加卷/hys/hysnew2/学习/1.mp4 \
   --demo \
   --output /media/ddc/新加卷/hys/hysnew2/学习/result.mp4
+
+# 开启定时刷新（每150帧重新识别已跟踪船只）
+python -m pipeline.cli /media/ddc/新加卷/hys/hysnew2/学习/1.mp4 \
+  --demo --enable-refresh --output result.mp4
+
+# 定时刷新 + 自定义间隔（每100帧刷新一次）
+python -m pipeline.cli /media/ddc/新加卷/hys/hysnew2/学习/1.mp4 \
+  --demo --enable-refresh --gap-num 100 --output result.mp4
 ```
 
 ### Agent 模式（LangChain 三步工具链）
@@ -104,6 +112,8 @@ python -m pipeline.cli rtsp://192.168.1.100/stream --demo --display
 | `-c / --concurrent` | 并发模式 | 级联模式 |
 | `--agent` | Agent 模式（LangChain 三步工具链） | 关 |
 | `--no-agent` | 硬编码模式（直接调用 VLM+查库+检索） | — |
+| `--enable-refresh` | 开启定时刷新（间隔帧数重新识别已跟踪船只） | 关 |
+| `--gap-num N` | 定时刷新间隔帧数 | 150 |
 | `--max-concurrent N` | 并发 Agent 数 | 4 |
 | `--max-frames N` | 最大处理帧数（0=不限） | 0 |
 | `--process-every N` | 每N帧处理一次 | 1 |
@@ -124,6 +134,11 @@ pipeline:
   # false = 硬编码模式（直接调用 VLM + 查库 + 语义检索）
   # true  = Agent 模式（LangChain ReAct Agent 编排 3 个工具）
   use_agent: false
+
+  # 定时刷新：true 则每隔 gap_num 帧重新识别已跟踪的船
+  # false 则仅新 track 出现时识别一次（现有逻辑不变）
+  enable_refresh: false
+  gap_num: 150
 ```
 
 ### Tracker 调参
