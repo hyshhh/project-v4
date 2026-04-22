@@ -57,12 +57,14 @@ class ShipPipeline:
         # 读取 pipeline 相关配置
         pipe_cfg = config.get("pipeline", {})
         self._concurrent_mode: bool = pipe_cfg.get("concurrent_mode", False)
+        self._max_concurrent: int = pipe_cfg.get("max_concurrent", 4)
         self._max_queued_frames: int = pipe_cfg.get("max_queued_frames", 30)
         self._process_every_n: int = max(1, pipe_cfg.get("process_every_n_frames", 1))
         self._demo_enabled: bool = pipe_cfg.get("demo", False)
         self._use_agent: bool = pipe_cfg.get("use_agent", False)
         self._enable_refresh: bool = pipe_cfg.get("enable_refresh", False)
         self._gap_num: int = pipe_cfg.get("gap_num", 150)
+        self._prompt_mode: str = pipe_cfg.get("prompt_mode", "detailed")
 
         # 读取 Agent 数据库配置
         from database import ShipDatabase
@@ -179,7 +181,7 @@ class ShipPipeline:
 
         # 第一步：VLM 识别
         crop_b64 = self._encode_image(crop)
-        vlm_result = _vlm_infer(crop_b64)
+        vlm_result = _vlm_infer(crop_b64, prompt_mode=self._prompt_mode)
         hull_number = vlm_result.get("hull_number", "")
         description = vlm_result.get("description", "")
 
@@ -215,18 +217,48 @@ class ShipPipeline:
         """
         使用外层 Agent 执行三步链路（recognize_ship → lookup → retrieve）。
 
-        将 crop 编码为 base64 传入 Agent，由 Agent 自行编排工具调用。
+        先通过 VLM 预识别弦号和描述，再将结构化信息传入 Agent 执行
+        lookup + retrieve 两步工具链，避免将 base64 图片塞入 prompt
+        导致 token 超限。
         """
         if self._agent is None:
             raise RuntimeError("Agent 模式未初始化（use_agent=True 但 agent 为 None）")
 
+        from tools import _vlm_infer
+
+        # 第一步：本地 VLM 预识别（不经过 Agent，节省 token）
         crop_b64 = self._encode_image(crop)
+        vlm_result = _vlm_infer(crop_b64, prompt_mode=self._prompt_mode)
+        hull_number = vlm_result.get("hull_number", "")
+        description = vlm_result.get("description", "")
+
+        self._log_agent_trace(
+            "agent_vlm_preinfer",
+            track_id=0,
+            frame_id=0,
+            content=f"VLM预识别: 弦号={hull_number or '(无)'} 描述={description[:50] if description else '(无)'}",
+        )
+
+        if not hull_number and not description:
+            return AgentResult(answer="VLM 未返回结果")
+
+        # 将 VLM 结果传入 Agent，由 Agent 编排 lookup + retrieve
         query = (
-            f"请识别以下船只图像中的弦号：\n"
-            f"data:image/jpeg;base64,{crop_b64}"
+            f"VLM 识别结果：弦号=\"{hull_number}\"，描述=\"{description}\"。"
+            f"请按步骤查找数据库。"
         )
 
         result = self._agent.run_with_result(query)
+
+        # 如果 Agent 未返回有效结果，回退到本地三步链路
+        if not result.hull_number and not result.semantic_match_ids:
+            self._log_agent_trace(
+                "agent_fallback",
+                track_id=0,
+                frame_id=0,
+                content="Agent 无结果，回退到本地三步链路",
+            )
+            return self._run_three_step_chain(crop)
 
         self._log_agent_trace(
             "agent_chain_result",
@@ -742,6 +774,13 @@ class ShipPipeline:
         """设置 demo 开关。"""
         self._demo_enabled = enabled
         logger.info("Demo 模式: %s", "开启" if enabled else "关闭")
+
+    def set_prompt_mode(self, mode: str) -> None:
+        """设置提示词模式：detailed（详细）或 brief（简略）。"""
+        if mode not in ("detailed", "brief"):
+            raise ValueError(f"不支持的提示词模式: {mode}，仅支持 detailed/brief")
+        self._prompt_mode = mode
+        logger.info("提示词模式切换为: %s", mode)
 
     def set_use_agent(self, enabled: bool) -> None:
         """设置 Agent 模式开关。"""

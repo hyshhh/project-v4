@@ -21,8 +21,8 @@ class TestLoadConfig:
         assert c["llm"]["model"] == "Qwen/Qwen3-VL-4B-AWQ"
         assert c["llm"]["api_key"] == "abc123"
         assert c["llm"]["temperature"] == 0.0
-        assert c["embed"]["model"] == "text-embedding-v4"
-        assert "dashscope" in c["embed"]["base_url"]
+        assert c["embed"]["model"] == "Qwen3-Embedding-0.6B"
+        assert c["embed"]["base_url"] == "http://localhost:7891/v1"
         assert c["retrieval"]["top_k"] == 3
         assert c["retrieval"]["score_threshold"] == 0.5
         assert c["vector_store"]["persist_path"] == "./vector_store"

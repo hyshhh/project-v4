@@ -20,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """你是船弦号识别助手。严格按以下三步链路工作：
 
+【输入类型】
+如果输入包含 "VLM 识别结果"，说明 VLM 已完成预识别，直接使用其中的弦号和描述信息执行后续步骤。
+如果弦号为空字符串 ""，跳过第二步，直接进入第三步语义检索。
+
 【三步链路】
 1. 调用 recognize_ship 识别图像中的弦号和船只描述
    → 有弦号：进入第二步
@@ -106,11 +110,86 @@ class ShipHullAgent:
     def run_with_result(self, query: str) -> AgentResult:
         """运行 Agent，返回结构化结果（供 pipeline 使用）。"""
         try:
+            # 判断是否为 VLM 预识别结果（文本模式）
+            if query.startswith("VLM 识别结果"):
+                return self._run_text_mode(query)
+
             result = self._agent.invoke({"messages": [HumanMessage(content=query)]})
             return self._parse_result(result)
         except Exception as e:
             logger.exception("Agent 执行失败")
             return AgentResult(answer=f"Agent 执行失败: {e}")
+
+    def _run_text_mode(self, query: str) -> AgentResult:
+        """
+        文本模式：VLM 已完成预识别，直接执行 lookup → retrieve 两步。
+
+        避免将 base64 图片传入 Agent 造成 token 超限。
+        """
+        import re
+
+        # 解析 VLM 结果
+        hull_match = re.search(r'弦号="([^"]*)"', query)
+        desc_match = re.search(r'描述="([^"]*)"', query)
+        hull_number = hull_match.group(1) if hull_match else ""
+        description = desc_match.group(1) if desc_match else ""
+
+        if not hull_number and not description:
+            return AgentResult(answer="VLM 未返回有效结果")
+
+        match_type = "none"
+        semantic_ids: list[str] = []
+
+        # 第二步：精确查找（有弦号时）
+        if hull_number:
+            desc_in_db = self.db.lookup(hull_number)
+            if desc_in_db is not None:
+                match_type = "exact"
+                description = description or desc_in_db
+                return AgentResult(
+                    hull_number=hull_number,
+                    description=description,
+                    match_type=match_type,
+                    semantic_match_ids=[],
+                    answer=f"库内确定id：{hull_number}，描述：{description}",
+                )
+            elif description:
+                # 第三步：语义检索（弦号未匹配时）
+                results = self.db.semantic_search_filtered(description)
+                semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
+                if semantic_ids:
+                    match_type = "semantic"
+        elif description:
+            # 无弦号，直接第三步：语义检索
+            results = self.db.semantic_search_filtered(description)
+            semantic_ids = [r["hull_number"] for r in results if r.get("hull_number")]
+            if semantic_ids:
+                match_type = "semantic"
+
+        answer_parts = []
+        if hull_number:
+            answer_parts.append(f"未知id：{hull_number}")
+        else:
+            answer_parts.append("未识别到弦号")
+        if description:
+            answer_parts.append(f"描述：{description}")
+        if semantic_ids:
+            answer_parts.append(f"可能id：{'/'.join(semantic_ids[:3])}")
+        else:
+            answer_parts.append("无语义匹配结果")
+
+        logger.info(
+            "文本模式完成: 弦号=%s, 匹配=%s, 语义候选=%s",
+            hull_number or "(无)", match_type, semantic_ids,
+        )
+
+        return AgentResult(
+            hull_number=hull_number,
+            description=description,
+            match_type=match_type,
+            semantic_match_ids=semantic_ids,
+            answer="，".join(answer_parts),
+        )
 
     @staticmethod
     def _parse_result(result: dict) -> AgentResult:

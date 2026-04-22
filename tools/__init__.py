@@ -17,7 +17,7 @@ from config import load_config
 logger = logging.getLogger(__name__)
 
 
-def _vlm_infer(image_b64: str) -> dict:
+def _vlm_infer(image_b64: str, prompt_mode: str = "detailed") -> dict:
     """调用 VLM 进行弦号识别，返回 {hull_number, description}。"""
     config = load_config()
     llm_cfg = config.get("llm", {})
@@ -28,13 +28,19 @@ def _vlm_infer(image_b64: str) -> dict:
         "Content-Type": "application/json",
     }
 
-    prompt = (
-        "你是船只弦号识别专家。读取船体侧面的文字编号。\n"
-        "不要评价图片质量。即使模糊，也必须尝试读取任何可见文字、数字。\n"
-        "返回 JSON（不要其他文字）：\n"
-        '{"hull_number": "弦号编号（无则空字符串）", '
-        '"description": "船型+船体颜色+上层建筑颜色+特殊标志"}'
-    )
+    if prompt_mode == "brief":
+        prompt = (
+            "识别船体侧面文字编号。返回 JSON：\n"
+            '{"hull_number": "弦号（无则空）", "description": "简短描述"}'
+        )
+    else:
+        prompt = (
+            "你是船只弦号识别专家。读取船体侧面的文字编号。\n"
+            "不要评价图片质量。即使模糊，也必须尝试读取任何可见文字、数字。\n"
+            "返回 JSON（不要其他文字）：\n"
+            '{"hull_number": "弦号编号（无则空字符串）", '
+            '"description": "船型+船体颜色+上层建筑颜色+特殊标志"}'
+        )
 
     payload = {
         "model": llm_cfg.get("model", "Qwen/Qwen3-VL-4B-AWQ"),

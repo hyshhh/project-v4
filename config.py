@@ -103,9 +103,10 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
 
     if config_path:
         p = Path(config_path)
-        if not p.exists():
-            raise FileNotFoundError(f"配置文件不存在: {p}")
-        user_dict = _load_yaml(p)
+        if p.exists():
+            user_dict = _load_yaml(p)
+        else:
+            logger.debug("配置文件不存在: %s，使用默认值", p)
     else:
         candidates = [
             Path.cwd() / "config.yaml",
